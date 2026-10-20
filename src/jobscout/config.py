@@ -26,6 +26,7 @@ DATABASE_URL = os.getenv("DATABASE_URL") or f"sqlite:///{(ROOT / 'jobscout.db').
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS", "")
 EMAIL_APP_PASSWORD = os.getenv("EMAIL_APP_PASSWORD", "")
+EMAIL_TO = os.getenv("EMAIL_TO", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 ADZUNA_APP_ID = os.getenv("ADZUNA_APP_ID", "")
 ADZUNA_APP_KEY = os.getenv("ADZUNA_APP_KEY", "")
