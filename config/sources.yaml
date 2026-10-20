@@ -3,6 +3,7 @@ sources:
     enabled: true
     method: scrape
     base_url: https://www.graduates24.com
+    max_pages: 2
     pages:
       - /graduate_programmes
       - /internshipprogrammes
@@ -23,24 +24,22 @@ sources:
     note: "robots.txt allows listings. Read the site terms before enabling."
 
   adzuna:
-    enabled: false
+    enabled: true
     method: api
     country: za
-    note: "Free key at developer.adzuna.com. Add ADZUNA_APP_ID and ADZUNA_APP_KEY to .env"
+    max_days_old: 14
+    results_per_query: 50
+    call_limit: 25
+    note: "Free pilot: 25 test calls total, then paused automatically. GBP 8/month for more."
     queries:
       - data analyst
-      - data scientist
-      - data engineer
       - graduate programme
-      - solutions engineer
-      - software developer graduate
-      - business intelligence
-      - quantitative analyst
+      - statistician
 
   email_alerts:
     enabled: false
     method: email
-    note: "Create job alerts on these sites, sending to a dedicated Gmail inbox"
+    note: "Job alerts from other sites, sent to a dedicated Gmail inbox"
     alert_sources:
       - pnet
       - careers24
@@ -48,10 +47,6 @@ sources:
       - indeed
       - careerjunction
 
-  # Employer career pages: URLs to be added one by one later.
-  # Candidates: Nedbank, Standard Bank, Absa, FirstRand/FNB, Capitec, Discovery,
-  # Sanlam, Old Mutual, Investec, Vodacom, MTN, Takealot, Amazon, Prosus,
-  # NTT Data, Accenture, Deloitte, PwC, EY, KPMG
   company_pages:
     enabled: false
     pages: []
