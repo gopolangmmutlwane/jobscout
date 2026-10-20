@@ -12,3 +12,5 @@ anthropic
 python-docx
 markdown
 pytest
+flask
+waitress

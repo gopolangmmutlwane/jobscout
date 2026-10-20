@@ -31,6 +31,11 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 ADZUNA_APP_ID = os.getenv("ADZUNA_APP_ID", "")
 ADZUNA_APP_KEY = os.getenv("ADZUNA_APP_KEY", "")
 
+WEB_PIN = os.getenv("WEB_PIN", "")
+WEB_SECRET_KEY = os.getenv("WEB_SECRET_KEY", "")
+WEB_PORT = int(os.getenv("WEB_PORT") or 8765)
+WEB_BASE_URL = os.getenv("WEB_BASE_URL", "").rstrip("/")
+
 
 def load_profile() -> dict:
     return _load_yaml(PROFILE_PATH)

@@ -5,7 +5,7 @@ from email.message import EmailMessage
 
 from sqlalchemy import select
 
-from jobscout.config import EMAIL_ADDRESS, EMAIL_APP_PASSWORD, EMAIL_TO, SETTINGS
+from jobscout.config import EMAIL_ADDRESS, EMAIL_APP_PASSWORD, EMAIL_TO, SETTINGS, WEB_BASE_URL
 from jobscout.db.models import Job
 from jobscout.matching.baseline import rank_jobs
 
@@ -21,17 +21,23 @@ def pick_digest_jobs(session):
     """
     jobs = list(session.scalars(select(Job)))
     ranked, _ = rank_jobs(jobs)
-    floor = SETTINGS["search"]["min_match_score"]
+    new, reminders = select_digest(ranked)
     new_limit = SETTINGS["search"]["digest_size"]
     reminder_limit = SETTINGS["search"].get("reminder_size", 10)
+    return new[:new_limit], reminders[:reminder_limit]
 
-    new = [(j, s, why) for j, s, why in ranked if j.status == "new" and s >= floor][:new_limit]
+
+def select_digest(ranked):
+    """The digest rules without the size caps. ranked is rank_jobs() output (closed ads already dropped).
+    Also used by the web Review tab, so both always agree."""
+    floor = SETTINGS["search"]["min_match_score"]
+    new = [(j, s, why) for j, s, why in ranked if j.status == "new" and s >= floor]
     reminders = [
         (j, s, why) for j, s, why in ranked
         if j.status in ("notified", "shortlisted") and (s >= floor or j.status == "shortlisted")
     ]
     reminders.sort(key=lambda r: (r[0].closing_date or date.max, -r[1]))
-    return new, reminders[:reminder_limit]
+    return new, reminders
 
 
 def _closes(job, today):
@@ -51,8 +57,7 @@ def _block(n, job, why, today):
         f"   why: {', '.join(why)}",
         f"   source: {job.source}",
         f"   {job.url}",
-        "",
-    ]
+    ] + ([f"   skip / keep / applied: {WEB_BASE_URL}/ad/{job.id}"] if WEB_BASE_URL else []) + [""]
 
 
 def build_subject(new, reminders):
@@ -69,7 +74,8 @@ def build_subject(new, reminders):
 
 def build_digest(new, reminders):
     today = date.today()
-    lines = [f"jobscout digest, {today.isoformat()}", ""]
+    review_line = [f"Open jobscout: {WEB_BASE_URL}/review"] if WEB_BASE_URL else []
+    lines = [f"jobscout digest, {today.isoformat()}"] + review_line + [""]
     n = 0
     if new:
         lines += [f"NEW ({len(new)})", ""]
@@ -87,7 +93,7 @@ def build_digest(new, reminders):
         "Applied? python scripts\\track.py applied --id <id>   (stops the reminders, keeps the record)",
         "Not interested? python scripts\\track.py skip --id <id>",
         "To apply: open an ad you like, copy its full text into Claude, and ask for a tailored CV and cover letter.",
-    ]
+    ] + review_line
     return "\n".join(lines)
 
 

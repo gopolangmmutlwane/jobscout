@@ -41,6 +41,26 @@ Then create `data\profile\master_cv.md` and `data\profile\profile.yaml` (kept pr
     python scripts\label_jobs.py         # label ads
     python -m jobscout.daily             # collect, then email the digest
 
+## Triage page (phone)
+
+A small PIN-protected web page for working through ads on the phone: one ad at a time with Skip / Keep / Applied, plus Kept, Applied (with outcomes) and Skipped tabs.
+
+1. In `.env` set `WEB_PIN` (6+ digits) and `WEB_SECRET_KEY` (`python -c "import secrets; print(secrets.token_hex(32))"`). Optional: `WEB_PORT` (default 8765) and `WEB_BASE_URL`, the address the phone uses (for example `http://192.168.1.20:8765`). When `WEB_BASE_URL` is set, every ad in the email digest gets a direct link to its card.
+2. Start it:
+
+        powershell -ExecutionPolicy Bypass -File scripts\run_web.ps1
+
+   or, with the venv active, `python -m jobscout.web`. Output goes to `data\output\web.log`. Allow it through Windows Firewall on private networks when asked, then open `http://<pc-ip>:8765` on the phone (same Wi-Fi).
+
+To start it automatically at logon and restart it if it crashes, register a scheduled task once (in PowerShell, from the project folder):
+
+    $action   = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PWD\scripts\run_web.ps1`"" -WorkingDirectory "$PWD"
+    $trigger  = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    Register-ScheduledTask -TaskName "jobscout web" -Action $action -Trigger $trigger -Settings $settings -Description "jobscout triage page"
+
+Check it with `Get-ScheduledTask -TaskName "jobscout web"`, start it now with `Start-ScheduledTask -TaskName "jobscout web"`, remove it with `Unregister-ScheduledTask -TaskName "jobscout web"`.
+
 ## Stack
 
 Python, requests, BeautifulSoup, SQLAlchemy, scikit-learn, pandas, SMTP.
