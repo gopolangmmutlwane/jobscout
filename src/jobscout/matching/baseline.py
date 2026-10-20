@@ -90,6 +90,9 @@ def _drop_reason(job, profile, today, include_closed):
     desc = (job.description or "").lower()
     if not include_closed and job.closing_date and job.closing_date < today:
         return "already closed"
+    if not include_closed and job.source == "adzuna" and not job.closing_date and job.first_seen:
+        if (today - job.first_seen.date()).days > 21:
+            return "listing too old (no closing date)"
     for kw in profile.get("exclude_title_keywords", []) + profile.get("avoid_title_keywords", []):
         if _has_phrase(title, kw):
             return "excluded word in title"
