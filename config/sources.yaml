@@ -11,12 +11,10 @@ sources:
     note: "robots.txt disallows /api and /dashboard. Scrape HTML listing pages only."
 
   scholarly_africa:
-    enabled: true
-    method: scrape
+    enabled: false
+    method: manual
     base_url: https://scholarlyafrica.com
-    pages:
-      - /category/jobs/
-      - /category/internships/
+    note: "Site serves a bot-check page to scripts and its feed. Not collected automatically. Paste ads into chat manually."
 
   careerjunction:
     enabled: false
