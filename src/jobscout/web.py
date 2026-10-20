@@ -17,11 +17,15 @@ from sqlalchemy import func, select
 
 from jobscout import config
 from jobscout.db.models import Application, Job, Label
+from jobscout.config import SETTINGS
 from jobscout.db.session import get_session
 from jobscout.matching import baseline
 from jobscout.notify.email_digest import select_digest
 
 REVIEW_STATUSES = ("new", "notified")
+TAB_STATUSES = ("shortlisted", "applied", "skipped")
+RESTORED = "restored"  # Label value marking an ad you restored from Skipped; cleared by Skip / Keep / Applied
+SECTIONS = [("matches", "Matches"), ("other", "Other")]
 FOLLOW_UP_DAYS = 14  # same default as scripts/track.py
 # Button text -> value stored in Application.outcome. "applied" means waiting for a reply, which keeps
 # scripts/track.py 'list' and 'due' working.
@@ -80,6 +84,14 @@ main{padding-top:16px;padding-bottom:calc(88px + env(safe-area-inset-bottom))}
 .why{background:var(--tint);border:1px solid var(--line);border-radius:3px;padding:10px 12px;margin:0 0 6px}
 .why .k{font:700 11px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
 .why p{margin:6px 0 0;font-size:14px}
+.why.out{background:var(--warn);border-color:var(--amb)}
+.why.out p{margin:0;color:var(--ink)}
+.seg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:0 0 12px}
+.sg{display:flex;align-items:center;justify-content:center;gap:8px;min-height:48px;padding:0 12px;border:1px solid var(--line);border-radius:20px;background:var(--card);color:var(--mut);text-decoration:none;font:500 11px/1 var(--mono);letter-spacing:.04em;text-transform:uppercase}
+.sg .n{font-size:13px;font-weight:700;color:var(--ink)}
+.sg.on{background:var(--acc);border-color:var(--acc);color:var(--accfg)}
+.sg.on .n{color:var(--accfg)}
+.sg.on:focus-visible{outline-color:var(--amb)}
 details.desc{border-bottom:1px solid var(--line);margin:0 0 16px}
 details.desc summary{cursor:pointer;min-height:48px;display:flex;align-items:center;font:500 13px var(--mono);color:var(--mut)}
 details.desc .body{white-space:pre-line;font-size:15px;padding:0 0 14px}
@@ -160,12 +172,13 @@ TEMPLATES = {
 </form>{% endblock %}""",
     "card.html": """<article class="card">
 {% if job.status not in review_statuses %}<p class="state">{{ status_labels.get(job.status, job.status) }}</p>{% endif %}
+{% if restored %}<p class="state">Restored by you</p>{% endif %}
 <h1 class="title">{{ job.title }}</h1>
 <p class="co">{{ job.company or "Company not stated" }}</p>
 <p class="loc">{{ job.location or "Location not stated" }}</p>
 <span class="pill {{ pill[1] }}">{{ pill[0] }}</span>
 <p class="meta">{{ job.source }} · id {{ job.id }} · match {{ "%.2f"|format(score) if score is not none else "n/a" }}</p>
-<div class="why"><span class="k">Why</span><p>{{ why }}</p></div>
+{% if filtered %}<div class="why out"><p>Filtered out: {{ filtered }}</p></div>{% else %}<div class="why"><span class="k">Why</span><p>{{ why }}</p></div>{% endif %}
 {% if job.description %}<details class="desc"><summary>Read description</summary><div class="body">{{ job.description }}</div></details>{% endif %}
 {% if open_url %}<a class="open" href="{{ open_url }}" target="_blank" rel="noopener noreferrer">Open ad</a>{% endif %}
 <form class="acts" method="post" action="{{ url_for('act') }}">
@@ -176,13 +189,15 @@ TEMPLATES = {
 </form>
 </article>""",
     "review.html": """{% extends "base.html" %}{% block main %}
+<nav class="seg" aria-label="Review sections">{% for key, label in sections %}<a class="sg{% if key == section %} on{% endif %}" href="{{ url_for('review', s=key) }}"{% if key == section %} aria-current="page"{% endif %}><span>{{ label }}</span><span class="n">{{ section_counts[key] }}</span></a>{% endfor %}</nav>
 {% if job %}{% include "card.html" %}
 <div class="pager">
-{% if i > 0 %}<a class="pg" href="{{ url_for('review', i=i-1) }}">&larr; Back</a>{% else %}<span class="pg off" aria-disabled="true">&larr; Back</span>{% endif %}
+{% if i > 0 %}<a class="pg" href="{{ url_for('review', s=section, i=i-1) }}">&larr; Back</a>{% else %}<span class="pg off" aria-disabled="true">&larr; Back</span>{% endif %}
 <span class="pos">Ad {{ i + 1 }} of {{ total }}</span>
-{% if i + 1 < total %}<a class="pg" href="{{ url_for('review', i=i+1) }}">Later &rarr;</a>{% else %}<span class="pg off" aria-disabled="true">Later &rarr;</span>{% endif %}
+{% if i + 1 < total %}<a class="pg" href="{{ url_for('review', s=section, i=i+1) }}">Later &rarr;</a>{% else %}<span class="pg off" aria-disabled="true">Later &rarr;</span>{% endif %}
 </div>
-{% else %}<div class="empty"><h2>All caught up</h2><p>No open ads waiting for review.</p></div>{% endif %}
+{% elif section == "matches" %}<div class="empty"><h2>All caught up</h2><p>No matching ads waiting. Other ads are under Other.</p></div>
+{% else %}<div class="empty"><h2>Nothing else open</h2><p>Every open ad is either a match or already sorted.</p></div>{% endif %}
 {% endblock %}""",
     "ad.html": """{% extends "base.html" %}{% block main %}{% include "card.html" %}
 <div class="pager"><a class="pg" href="{{ url_for('review') }}">&larr; Review</a><span></span></div>
@@ -262,7 +277,8 @@ class _LoginLimiter:
 
 
 _rank_lock = threading.Lock()
-_rank_cache = {"key": None, "at": 0.0, "scores": {}}  # job id -> (score, why), in ranker order
+# scores: job id -> (score, why) in ranker order; dropped: job id -> why the ranker filtered it out
+_rank_cache = {"key": None, "at": 0.0, "scores": {}, "dropped": {}}
 
 
 def invalidate_rank_cache() -> None:
@@ -270,37 +286,75 @@ def invalidate_rank_cache() -> None:
         _rank_cache["key"] = None
 
 
-def _rank_scores(db, jobs=None):
-    """Scores and reasons from rank_jobs() for all stored ads. Recomputed at most every
-    RANK_CACHE_SECONDS, when ads are added, at midnight, or after invalidate_rank_cache()."""
+def _rank_data(db, jobs=None):
+    """rank_jobs() results for all stored ads. Recomputed at most every RANK_CACHE_SECONDS,
+    when ads are added, at midnight, or after invalidate_rank_cache()."""
     jobs = list(db.scalars(select(Job))) if jobs is None else jobs
     key = (date.today(), len(jobs), max((j.id for j in jobs), default=0))
     with _rank_lock:
         if _rank_cache["key"] != key or time.time() - _rank_cache["at"] > RANK_CACHE_SECONDS:
             ranked, _ = baseline.rank_jobs(jobs)
-            _rank_cache.update(key=key, at=time.time(), scores={j.id: (s, why) for j, s, why in ranked})
-        return _rank_cache["scores"]
+            scores = {j.id: (s, why) for j, s, why in ranked}
+            profile, today = config.load_profile(), date.today()
+            dropped = {j.id: baseline._drop_reason(j, profile, today, False) or "no sign of your field"
+                       for j in jobs if j.id not in scores}
+            _rank_cache.update(key=key, at=time.time(), scores=scores, dropped=dropped)
+        return _rank_cache["scores"], _rank_cache["dropped"]
 
 
-def _review_items(db):
-    """What the morning email lists (select_digest, without its size caps), minus anything kept,
-    applied or skipped. Soonest closing first, ads with no closing date last, then highest score."""
+def _rank_scores(db, jobs=None):
+    return _rank_data(db, jobs)[0]
+
+
+def _restored_ids(db):
+    return set(db.scalars(select(Label.job_id).where(Label.label == RESTORED)))
+
+
+def _review_sections(db):
+    """Review's two sections, as {section: [(job, score)]}.
+
+    matches: what the morning email lists (select_digest, without its size caps), minus anything kept,
+    applied or skipped. Soonest closing first, ads with no closing date last, then highest score.
+    other: every other open ad with status new or notified (filtered out by the ranker, below the floor,
+    or restored by you), plus any ad whose status has no tab. Restored ads first, then as matches.
+    Every ad is in exactly one of matches, other, Kept, Applied, Skipped, or closed (new/notified past
+    its closing date)."""
     jobs = list(db.scalars(select(Job)))
     by_id = {j.id: j for j in jobs}
-    ranked = [(by_id[i], s, why) for i, (s, why) in _rank_scores(db, jobs).items() if i in by_id]
-    new, reminders = select_digest(ranked)
-    items = [r for r in new + reminders if r[0].status not in ("applied", "skipped", "shortlisted")]
-    items.sort(key=lambda r: (r[0].closing_date is None, r[0].closing_date or date.max, -r[1]))
-    return items
+    scores, _dropped = _rank_data(db, jobs)
+    new, reminders = select_digest([(by_id[i], s, why) for i, (s, why) in scores.items() if i in by_id])
+    matches = [(j, s) for j, s, _w in new + reminders if j.status not in TAB_STATUSES]
+    matches.sort(key=lambda r: (r[0].closing_date is None, r[0].closing_date or date.max, -r[1]))
+    match_ids = {j.id for j, _s in matches}
+
+    today = date.today()
+    restored = _restored_ids(db)
+    other = []
+    for j in jobs:
+        if j.id in match_ids or j.status in TAB_STATUSES:
+            continue
+        if j.status in REVIEW_STATUSES and j.closing_date and j.closing_date < today:
+            continue  # closed
+        hit = scores.get(j.id)
+        other.append((j, hit[0] if hit else j.match_score))
+    other.sort(key=lambda r: (r[0].id not in restored, r[0].closing_date is None,
+                              r[0].closing_date or date.max, -r[1] if r[1] is not None else float("inf")))
+    return {"matches": matches, "other": other}
 
 
-def _why_text(db, job) -> str:
-    """Match reasons from the ranker. They are not stored in the database, so they come from the cache."""
-    hit = _rank_scores(db).get(job.id)
+def _why_or_filtered(db, job):
+    """(why, filtered): the ranker's match reasons for an ad that clears the floor, otherwise the
+    reason it was filtered out (and so is not in Matches)."""
+    scores, dropped = _rank_data(db)
+    floor = SETTINGS["search"]["min_match_score"]
+    hit = scores.get(job.id)
+    if hit and hit[0] >= floor:
+        if job.status in REVIEW_STATUSES or job.status in TAB_STATUSES:
+            return ", ".join(hit[1]), None
+        return None, f"status '{job.status}' has no tab"
     if hit:
-        return ", ".join(hit[1])
-    reason = baseline._drop_reason(job, config.load_profile(), date.today(), False)
-    return f"Filtered out by the ranker: {reason or 'no sign of your field'}."
+        return None, f"below the relevance floor ({hit[0]:.3f} < {floor:.3f})"
+    return None, dropped.get(job.id) or "no sign of your field"
 
 
 def _closing_pill(job, today):
@@ -327,18 +381,26 @@ def _safe_next(value, default):
 
 def _counts(db, review_count=None):
     by_status = dict(db.execute(select(Job.status, func.count()).group_by(Job.status)).all())
-    review = len(_review_items(db)) if review_count is None else review_count
+    if review_count is None:
+        review_count = sum(len(v) for v in _review_sections(db).values())
+    review = review_count
     return {"review": review, "kept": by_status.get("shortlisted", 0),
             "applied": by_status.get("applied", 0), "skipped": by_status.get("skipped", 0)}
 
 
 def _latest_label(db, job_id):
-    return db.scalars(select(Label).where(Label.job_id == job_id).order_by(Label.id.desc())).first()
+    return db.scalars(select(Label).where(Label.job_id == job_id, Label.label != RESTORED)
+                      .order_by(Label.id.desc())).first()
 
 
 def _do_action(db, job, action, today):
     """Apply an action and return what is needed to undo it."""
-    undo = {"job": job.id, "status": job.status, "label": None, "app": None}
+    undo = {"job": job.id, "status": job.status, "label": None, "app": None,
+            "restored_removed": [], "restored_added": None}
+    if action in ("skip", "keep", "applied"):
+        for lab in db.scalars(select(Label).where(Label.job_id == job.id, Label.label == RESTORED)):
+            undo["restored_removed"].append(lab.labelled_at.isoformat() if lab.labelled_at else None)
+            db.delete(lab)
     if action in ("skip", "keep"):
         name = "skip" if action == "skip" else "interested"
         lab = _latest_label(db, job.id)
@@ -368,6 +430,11 @@ def _do_action(db, job, action, today):
             removed.append([lab.label, lab.labelled_at.isoformat() if lab.labelled_at else None])
             db.delete(lab)
         undo["label"] = {"op": "deleted", "rows": removed}
+        if not db.scalars(select(Label).where(Label.job_id == job.id, Label.label == RESTORED)).first():
+            mark = Label(job_id=job.id, label=RESTORED)
+            db.add(mark)
+            db.flush()
+            undo["restored_added"] = mark.id
         job.status = "notified"
     return undo
 
@@ -396,6 +463,13 @@ def _undo_action(db, undo):
         row = db.get(Application, undo["app"])
         if row:
             db.delete(row)
+    if undo.get("restored_added"):
+        row = db.get(Label, undo["restored_added"])
+        if row:
+            db.delete(row)
+    for at in undo.get("restored_removed") or []:
+        db.add(Label(job_id=job.id, label=RESTORED,
+                     labelled_at=datetime.fromisoformat(at) if at else datetime.now(timezone.utc)))
     return job
 
 
@@ -491,8 +565,10 @@ def create_app(pin=None, secret_key=None):
     def card_ctx(job, next_url):
         url = job.url or ""
         hit = _rank_scores(db()).get(job.id)
-        return {"job": job, "pill": _closing_pill(job, date.today()), "why": _why_text(db(), job),
-                "score": hit[0] if hit else job.match_score,
+        why, filtered = _why_or_filtered(db(), job)
+        restored = db().scalars(select(Label.id).where(Label.job_id == job.id, Label.label == RESTORED)).first()
+        return {"job": job, "pill": _closing_pill(job, date.today()), "why": why, "filtered": filtered,
+                "restored": restored is not None, "score": hit[0] if hit else job.match_score,
                 "open_url": url if url.lower().startswith(("https://", "http://")) else None,
                 "next_url": next_url}
 
@@ -525,13 +601,23 @@ def create_app(pin=None, secret_key=None):
 
     @app.route("/review")
     def review():
-        items = _review_items(db())
+        keys = [k for k, _label in SECTIONS]
+        section = request.args.get("s")
+        if section not in keys:
+            section = session.get("review_section") if session.get("review_section") in keys else keys[0]
+        if session.get("review_section") != section:
+            session["review_section"] = section
+        sections = _review_sections(db())
+        section_counts = {k: len(v) for k, v in sections.items()}
+        items = sections[section]
+        ctx = {"sections": SECTIONS, "section": section, "section_counts": section_counts}
         if not items:
-            return page("review.html", "review", [], review_count=0, job=None, i=0, total=0)
+            return page("review.html", "review", [], review_count=sum(section_counts.values()),
+                        job=None, i=0, total=0, **ctx)
         i = max(0, min(request.args.get("i", 0, type=int), len(items) - 1))
         job = items[i][0]
-        return page("review.html", "review", [job], review_count=len(items), i=i, total=len(items),
-                    **card_ctx(job, url_for("review", i=i)))
+        return page("review.html", "review", [job], review_count=sum(section_counts.values()),
+                    i=i, total=len(items), **ctx, **card_ctx(job, url_for("review", s=section, i=i)))
 
     @app.route("/ad/<int:job_id>")
     def ad(job_id):
@@ -596,9 +682,11 @@ def create_app(pin=None, secret_key=None):
         invalidate_rank_cache()
         session["toast"] = "Undone."
         if job is not None and nxt.startswith(url_for("review")):
-            ids = [j.id for j, _s, _w in _review_items(s)]
-            if job.id in ids:
-                nxt = url_for("review", i=ids.index(job.id))
+            for key, items in _review_sections(s).items():
+                ids = [j.id for j, _s in items]
+                if job.id in ids:
+                    nxt = url_for("review", s=key, i=ids.index(job.id))
+                    break
         return redirect(nxt)
 
     @app.route("/outcome", methods=["POST"])
