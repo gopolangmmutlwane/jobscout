@@ -35,3 +35,14 @@ def make_hash(title: str, company: Optional[str], description: Optional[str]) ->
     else:
         key = f"{_norm(title)}|{_norm(description)[:300]}"
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+_ADZUNA_ID = re.compile(r"adzuna\.[a-z.]+/(?:details|land/ad)/(\d+)")
+
+
+def canonical_url(url: str) -> str:
+    """Stable key for an ad link. Adzuna links carry changing tracking tokens, so use the ad id."""
+    m = _ADZUNA_ID.search(url or "")
+    if m:
+        return f"adzuna:{m.group(1)}"
+    return (url or "").split("#")[0].rstrip("/")

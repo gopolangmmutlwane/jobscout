@@ -88,7 +88,8 @@ def run_match(top=None, include_closed=False, show_all=False) -> int:
             closes = f"{job.closing_date.isoformat()} ({label})"
         else:
             closes = "n/a"
-        print(f"\n{i}. [{score:.3f}] {job.title}")
+        tag = f"  <{job.status}>" if job.status != "new" else ""
+        print(f"\n{i}. [{score:.3f}] {job.title}{tag}")
         print(f"   {job.company or '?'} | {job.location or '?'} | closes {closes}")
         print(f"   why: {', '.join(why)}")
         print(f"   {job.url}")

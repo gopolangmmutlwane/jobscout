@@ -4,7 +4,9 @@ import sys
 
 from jobscout.db.session import get_session
 from jobscout.main import run_collect
-from jobscout.notify.email_digest import build_digest, mark_notified, pick_digest_jobs, send_email
+from jobscout.notify.email_digest import (
+    build_digest, build_subject, mark_notified, pick_digest_jobs, send_email,
+)
 
 
 def main() -> int:
@@ -27,17 +29,20 @@ def main() -> int:
             print("Collection stopped; continuing with ads already stored.")
 
         session = get_session()
-        picks = pick_digest_jobs(session)
-        if not picks:
-            print("No new matches to send.")
+        new, reminders = pick_digest_jobs(session)
+        if not new and not reminders:
+            print("Nothing to send.")
             return 0
-        body = build_digest(picks)
+        body = build_digest(new, reminders)
+        subject = build_subject(new, reminders)
         if a.dry_run:
+            print(subject)
+            print()
             print(body)
             return 0
-        send_email(f"jobscout: {len(picks)} new job matches", body)
-        mark_notified(session, picks)
-        print(f"Digest sent with {len(picks)} ads.")
+        send_email(subject, body)
+        mark_notified(session, new)
+        print(f"Digest sent: {len(new)} new, {len(reminders)} still open.")
         return 0
     except (smtplib.SMTPException, OSError, RuntimeError) as e:
         print(f"Email problem: {e}")

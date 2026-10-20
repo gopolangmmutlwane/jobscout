@@ -53,3 +53,16 @@ class Run(Base):
     jobs_found: Mapped[int] = mapped_column(Integer, default=0)
     jobs_new: Mapped[int] = mapped_column(Integer, default=0)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class Application(Base):
+    """One row per job you applied to."""
+    __tablename__ = "applications"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), unique=True)
+    applied_on: Mapped[date] = mapped_column(Date)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    outcome: Mapped[str] = mapped_column(String(20), default="applied")
+    follow_up_on: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

@@ -1,6 +1,7 @@
 search:
   min_match_score: 0.20
   digest_size: 10
+  reminder_size: 80
 
 http:
   user_agent: "jobscout/0.1 (personal job search; contact: mmutlwaneg@gmail.com)"
