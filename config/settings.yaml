@@ -1,0 +1,12 @@
+search:
+  min_match_score: 0.20
+  digest_size: 10
+
+http:
+  user_agent: "jobscout/0.1 (personal job search; contact: mmutlwaneg@gmail.com)"
+  delay_seconds: 2
+  timeout_seconds: 20
+
+tailoring:
+  model: claude-sonnet-5-5
+  max_tokens: 2500

@@ -1,0 +1,14 @@
+requests
+beautifulsoup4
+lxml
+feedparser
+python-dotenv
+pyyaml
+sqlalchemy
+psycopg2-binary
+pandas
+scikit-learn
+anthropic
+python-docx
+markdown
+pytest

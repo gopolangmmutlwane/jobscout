@@ -1,0 +1,59 @@
+sources:
+  graduates24:
+    enabled: true
+    method: scrape
+    base_url: https://www.graduates24.com
+    pages:
+      - /graduate_programmes
+      - /internshipprogrammes
+      - /entry_level_jobs
+      - /governmentjobs
+    note: "robots.txt disallows /api and /dashboard. Scrape HTML listing pages only."
+
+  scholarly_africa:
+    enabled: true
+    method: scrape
+    base_url: https://scholarlyafrica.com
+    pages:
+      - /category/jobs/
+      - /category/internships/
+
+  careerjunction:
+    enabled: false
+    method: scrape
+    base_url: https://www.careerjunction.co.za
+    note: "robots.txt allows listings. Read the site terms before enabling."
+
+  adzuna:
+    enabled: false
+    method: api
+    country: za
+    note: "Free key at developer.adzuna.com. Add ADZUNA_APP_ID and ADZUNA_APP_KEY to .env"
+    queries:
+      - data analyst
+      - data scientist
+      - data engineer
+      - graduate programme
+      - solutions engineer
+      - software developer graduate
+      - business intelligence
+      - quantitative analyst
+
+  email_alerts:
+    enabled: false
+    method: email
+    note: "Create job alerts on these sites, sending to a dedicated Gmail inbox"
+    alert_sources:
+      - pnet
+      - careers24
+      - linkedin
+      - indeed
+      - careerjunction
+
+  # Employer career pages: URLs to be added one by one later.
+  # Candidates: Nedbank, Standard Bank, Absa, FirstRand/FNB, Capitec, Discovery,
+  # Sanlam, Old Mutual, Investec, Vodacom, MTN, Takealot, Amazon, Prosus,
+  # NTT Data, Accenture, Deloitte, PwC, EY, KPMG
+  company_pages:
+    enabled: false
+    pages: []
