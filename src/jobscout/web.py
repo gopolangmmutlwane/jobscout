@@ -16,7 +16,7 @@ from jinja2 import DictLoader
 from sqlalchemy import func, select
 
 from jobscout import config
-from jobscout.db.models import Application, Job, Label
+from jobscout.db.models import Application, EmailEvent, Job, Label
 from jobscout.config import SETTINGS
 from jobscout.db.session import get_session
 from jobscout.matching import baseline
@@ -36,7 +36,12 @@ OUTCOMES = [
     ("offer", "Offer"),
     ("rejected", "Rejected"),
 ]
-OUTCOME_LABELS = dict(OUTCOMES) | {"no_reply": "No reply", "withdrawn": "Withdrawn"}
+OUTCOME_LABELS = dict(OUTCOMES) | {"no_reply": "No reply", "withdrawn": "Withdrawn", "assessment": "Assessment"}
+# Reply category -> Application.outcome value written by "Accept" (same values as the outcome buttons;
+# there is no Assessment button, so an accepted assessment reply is stored as "assessment").
+REPLY_TO_OUTCOME = {"interview": "interview", "offer": "offer", "rejection": "rejected", "assessment": "assessment"}
+REPLY_LABELS = {"acknowledgement": "Acknowledgement", "assessment": "Assessment", "interview": "Interview",
+                "offer": "Offer", "rejection": "Rejection", "other": "Other"}
 OPEN_OUTCOMES = ("applied", "follow_up")
 STATUS_LABELS = {"new": "New", "notified": "In review", "shortlisted": "Kept", "applied": "Applied",
                  "skipped": "Skipped"}
@@ -84,6 +89,12 @@ main{padding-top:16px;padding-bottom:calc(88px + env(safe-area-inset-bottom))}
 .why{background:var(--tint);border:1px solid var(--line);border-radius:3px;padding:10px 12px;margin:0 0 6px}
 .why .k{font:700 11px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
 .why p{margin:6px 0 0;font-size:14px}
+.reply{background:var(--tint);border:1px solid var(--line);border-radius:3px;padding:10px 12px;margin:10px 0 0}
+.reply .k{font:700 11px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
+.reply p{margin:6px 0 0}
+.reply .subj{font-size:14px;color:var(--ink)}
+.suggest{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:8px;margin-top:10px;background:var(--warn);border:1px solid var(--amb);border-radius:3px;padding:8px 8px 8px 12px}
+.suggest .st{font:600 13px/1.3 var(--mono);color:var(--ink)}
 .why.out{background:var(--warn);border-color:var(--amb)}
 .why.out p{margin:0;color:var(--ink)}
 .seg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:0 0 12px}
@@ -215,11 +226,18 @@ TEMPLATES = {
 {% else %}<div class="empty"><h2>Nothing kept</h2><p>Ads you keep from Review show up here.</p></div>{% endif %}
 {% endblock %}""",
     "applied.html": """{% extends "base.html" %}{% block main %}<h2 class="h">Applied</h2>
-{% if items %}<ul class="rows">{% for job, app, due in items %}<li class="row">
+{% if items %}<ul class="rows">{% for job, app, due, ev, suggest in items %}<li class="row">
 <a class="rt" href="{{ url_for('ad', job_id=job.id) }}">{{ job.title }}</a>
 <p class="co">{{ job.company or "Company not stated" }}</p>
 {% if app %}<p class="small">Applied {{ app.applied_on.strftime("%d/%m/%Y") }}</p>
 <div class="tags"><span class="tag">{{ outcome_labels.get(app.outcome, app.outcome) }}</span>{% if due %}<span class="tag due">Follow-up DUE</span>{% endif %}</div>
+{% if ev %}<div class="reply"><span class="k">Latest reply</span><p><span class="tag">{{ reply_labels.get(ev.category, ev.category) }}</span> <span class="small">{{ ev.received_at.strftime("%d/%m/%Y") if ev.received_at else "date unknown" }}</span></p><p class="subj">{{ ev.subject }}</p></div>{% endif %}
+{% if suggest %}<form class="suggest" method="post" action="{{ url_for('reply') }}">
+<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="event_id" value="{{ ev.id }}">
+<span class="st">Suggested: {{ outcome_labels.get(suggest, suggest) }}</span>
+<button class="b2 appl" name="decision" value="accept">Accept</button>
+<button class="b2 ghost" name="decision" value="dismiss">Dismiss</button>
+</form>{% endif %}
 <form class="outs" method="post" action="{{ url_for('outcome') }}">
 <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="job_id" value="{{ job.id }}">
 {% for value, label in outcomes %}<button class="ob{% if app.outcome == value %} on{% endif %}" name="outcome" value="{{ value }}"{% if app.outcome == value %} aria-pressed="true"{% endif %}>{{ label }}</button>{% endfor %}
@@ -520,7 +538,7 @@ def create_app(pin=None, secret_key=None):
     def _globals():
         return {"csrf": csrf_token(), "css": CSS, "fonts_url": FONTS_URL, "tabs": TABS,
                 "review_statuses": REVIEW_STATUSES, "status_labels": STATUS_LABELS,
-                "outcome_labels": OUTCOME_LABELS, "outcomes": OUTCOMES, "here": request.full_path.rstrip("?"),
+                "outcome_labels": OUTCOME_LABELS, "reply_labels": REPLY_LABELS, "outcomes": OUTCOMES, "here": request.full_path.rstrip("?"),
                 "toast": session.pop("toast", None), "can_undo": "undo" in session}
 
     @app.before_request
@@ -642,10 +660,45 @@ def create_app(pin=None, secret_key=None):
             .where(Job.status == "applied")
             .order_by(Application.applied_on.is_(None), Application.applied_on.desc(), Job.id.desc())
         ).all()
-        items = [(job, app_row, bool(app_row and app_row.follow_up_on and app_row.follow_up_on <= today
-                                      and app_row.outcome in OPEN_OUTCOMES))
-                 for job, app_row in rows]
+        latest = {}
+        job_ids = [j.id for j, _a in rows]
+        if job_ids:
+            for ev in db().scalars(select(EmailEvent).where(EmailEvent.job_id.in_(job_ids))
+                                   .order_by(EmailEvent.received_at.is_(None), EmailEvent.received_at.desc(),
+                                             EmailEvent.id.desc())):
+                latest.setdefault(ev.job_id, ev)
+        items = []
+        for job, app_row in rows:
+            due = bool(app_row and app_row.follow_up_on and app_row.follow_up_on <= today
+                       and app_row.outcome in OPEN_OUTCOMES)
+            ev = latest.get(job.id)
+            suggest = REPLY_TO_OUTCOME.get(ev.category) if ev and not ev.handled and app_row else None
+            if suggest == (app_row.outcome if app_row else None):
+                suggest = None
+            items.append((job, app_row, due, ev, suggest))
         return page("applied.html", "applied", [j for j, _a in rows], items=items)
+
+    @app.route("/reply", methods=["POST"])
+    def reply():
+        s = db()
+        ev = s.get(EmailEvent, request.form.get("event_id", type=int) or 0)
+        decision = request.form.get("decision", "")
+        if ev is None or decision not in ("accept", "dismiss"):
+            abort(400 if ev is not None else 404)
+        if decision == "accept":
+            value = REPLY_TO_OUTCOME.get(ev.category)
+            app_row = s.scalars(select(Application).where(Application.job_id == ev.job_id)).first()
+            if value is None or app_row is None:
+                abort(400)
+            app_row.outcome = value
+            app_row.updated_at = datetime.now(timezone.utc)
+            session["toast"] = f"Outcome: {OUTCOME_LABELS[value]}"
+        else:
+            session["toast"] = "Suggestion dismissed"
+        ev.handled = True
+        s.commit()
+        session.pop("undo", None)
+        return redirect(url_for("applied"))
 
     @app.route("/skipped")
     def skipped():

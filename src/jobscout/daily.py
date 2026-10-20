@@ -2,11 +2,33 @@ import argparse
 import smtplib
 import sys
 
+from jobscout.config import SETTINGS
 from jobscout.db.session import get_session
 from jobscout.main import run_collect
 from jobscout.notify.email_digest import (
     build_digest, build_subject, mark_notified, pick_digest_jobs, send_email,
 )
+from jobscout.replies.check import check_replies
+from jobscout.replies.imap_reader import MailboxError
+
+
+def check_replies_for_digest(session, dry_run=False):
+    """Run the reply check when replies.enabled is set. Problems are printed (so they land in the
+    daily log) and never stop the digest or appear in the email. Returns [(EmailEvent, Job)]."""
+    if not SETTINGS.get("replies", {}).get("enabled"):
+        return []
+    try:
+        result = check_replies(session, dry_run=dry_run)
+    except MailboxError as e:
+        print(f"[replies] skipped: {e}")
+        return []
+    except Exception as e:  # a reply-check bug must not cost you the digest
+        session.rollback()
+        print(f"[replies] failed: {e.__class__.__name__}: {e}")
+        return []
+    print(f"[replies] scanned {result.scanned}, matched {result.matched}, new {len(result.new)}, "
+          f"job-related but unmatched {result.unmatched_job_related}")
+    return result.new
 
 
 def main() -> int:
@@ -29,11 +51,12 @@ def main() -> int:
             print("Collection stopped; continuing with ads already stored.")
 
         session = get_session()
+        replies = check_replies_for_digest(session, dry_run=a.dry_run)
         new, reminders = pick_digest_jobs(session)
-        if not new and not reminders:
+        if not new and not reminders and not replies:
             print("Nothing to send.")
             return 0
-        body = build_digest(new, reminders)
+        body = build_digest(new, reminders, replies)
         subject = build_subject(new, reminders)
         if a.dry_run:
             print(subject)

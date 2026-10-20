@@ -72,10 +72,17 @@ def build_subject(new, reminders):
     return subject
 
 
-def build_digest(new, reminders):
+def build_digest(new, reminders, replies=()):
+    """replies: [(EmailEvent, Job)] found by this run's reply check (empty when it is switched off)."""
     today = date.today()
     review_line = [f"Open jobscout: {WEB_BASE_URL}/review"] if WEB_BASE_URL else []
     lines = [f"jobscout digest, {today.isoformat()}"] + review_line + [""]
+    if replies:
+        lines += [f"NEW REPLIES ({len(replies)})", ""]
+        for event, job in replies:
+            when = event.received_at.strftime("%Y-%m-%d") if event.received_at else "date unknown"
+            lines.append(f"- {job.company or job.title} | {event.category} | {when}")
+        lines.append("")
     n = 0
     if new:
         lines += [f"NEW ({len(new)})", ""]

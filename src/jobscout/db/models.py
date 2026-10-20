@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -66,3 +66,23 @@ class Application(Base):
     outcome: Mapped[str] = mapped_column(String(20), default="applied")
     follow_up_on: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class EmailEvent(Base):
+    """A reply in the mailbox linked to one of your applications. Only a short snippet of the
+    body is kept: never the full body or attachments."""
+    __tablename__ = "email_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    message_id: Mapped[str] = mapped_column(String(500), unique=True)
+    job_id: Mapped[Optional[int]] = mapped_column(ForeignKey("jobs.id"), nullable=True)
+    received_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    from_addr: Mapped[str] = mapped_column(String(320))
+    from_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    subject: Mapped[str] = mapped_column(String(500), default="")
+    snippet: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)  # first 300 chars, cleaned
+    category: Mapped[str] = mapped_column(String(20))  # acknowledgement/assessment/interview/offer/rejection/other
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    match_reason: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    handled: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
