@@ -88,6 +88,10 @@ def _fit_signal(description: str, fit_fields) -> int:
 def _drop_reason(job, profile, today, include_closed):
     title = job.title or ""
     desc = (job.description or "").lower()
+    company = (job.company or "").lower()
+    for c in profile.get("exclude_companies", []):
+        if c.lower() in company:
+            return "excluded company"
     if not include_closed and job.closing_date and job.closing_date < today:
         return "already closed"
     if not include_closed and job.source == "adzuna" and not job.closing_date and job.first_seen:
