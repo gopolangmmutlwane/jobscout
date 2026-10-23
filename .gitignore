@@ -8,3 +8,4 @@ data/output/
 *.db
 .ipynb_checkpoints/
 .vscode/
+data/applications/

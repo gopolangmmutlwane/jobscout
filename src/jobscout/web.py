@@ -11,12 +11,14 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from math import ceil
 
-from flask import Flask, abort, g, redirect, render_template, request, session, url_for
+from pathlib import Path
+
+from flask import Flask, abort, g, redirect, render_template, request, send_file, session, url_for
 from jinja2 import DictLoader
 from sqlalchemy import func, select
 
-from jobscout import config
-from jobscout.db.models import Application, EmailEvent, Job, Label
+from jobscout import config, documents
+from jobscout.db.models import Application, ApplicationDocument, EmailEvent, Job, Label
 from jobscout.config import SETTINGS
 from jobscout.db.session import get_session
 from jobscout.matching import baseline
@@ -95,6 +97,28 @@ main{padding-top:16px;padding-bottom:calc(88px + env(safe-area-inset-bottom))}
 .reply .subj{font-size:14px;color:var(--ink)}
 .suggest{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:8px;margin-top:10px;background:var(--warn);border:1px solid var(--amb);border-radius:3px;padding:8px 8px 8px 12px}
 .suggest .st{font:600 13px/1.3 var(--mono);color:var(--ink)}
+.files{margin:14px 0;border-top:1px solid var(--line);padding-top:12px}
+.fh{font:600 17px/1.2 var(--serif);margin:0 0 8px;display:flex;justify-content:space-between;align-items:baseline}
+.flist{list-style:none;margin:0 0 12px;padding:0;display:grid;gap:8px}
+.frow{border:1px solid var(--line);border-radius:3px;padding:10px;background:var(--card)}
+.fmeta{margin:0 0 4px;display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.fname{font-weight:500;overflow-wrap:anywhere}
+.fbtns{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.fbtns>a,.fbtns>details{flex:1 1 0;min-width:0}
+.fbtns>details[open]{flex-basis:100%}
+.fbtns a.b2,.del summary{display:flex;align-items:center;justify-content:center;text-decoration:none}
+.del summary{list-style:none;min-height:48px;cursor:pointer}
+.del summary::-webkit-details-marker{display:none}
+.confirm{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;margin-top:8px;background:var(--warn);border:1px solid var(--amb);border-radius:3px;padding:8px 8px 8px 12px;font-size:14px}
+.up{display:grid;gap:6px}
+.lbl{font:500 12px var(--mono);letter-spacing:.04em;text-transform:uppercase;color:var(--mut)}
+.up select,.up input[type=file]{width:100%;min-height:48px;border:1px solid var(--line);border-radius:3px;background:var(--card);color:var(--ink);padding:8px 10px;font-size:16px}
+.up button{margin-top:4px}
+.filesbox{margin-top:12px;border:1px solid var(--line);border-radius:3px;background:var(--tint)}
+.filesbox>summary{min-height:48px;display:flex;align-items:center;padding:0 12px;cursor:pointer;font:500 13px var(--mono);color:var(--ink)}
+.filesbox>.files{margin:0;padding:12px;border-top:1px solid var(--line);background:var(--card)}
+.cvbtn{display:inline-flex;align-items:center;justify-content:center;min-width:96px;margin-top:10px;text-decoration:none}
+.toast.err{background:var(--red)}
 .why.out{background:var(--warn);border-color:var(--amb)}
 .why.out p{margin:0;color:var(--ink)}
 .seg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:0 0 12px}
@@ -168,8 +192,8 @@ TEMPLATES = {
 </div></nav>{% endif %}
 <main class="wrap">{% block main %}{% endblock %}</main>
 <footer class="wrap foot">{% if show_adzuna %}<p>Listings provided by <a href="https://www.adzuna.co.za" target="_blank" rel="noopener noreferrer">Adzuna</a></p>{% endif %}</footer>
-{% if toast %}<div class="toast" id="toast" role="status"><span>{{ toast }}</span>{% if can_undo %}<form method="post" action="{{ url_for('undo') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ here }}"><button type="submit">Undo</button></form>{% endif %}</div>
-<script>setTimeout(function(){var t=document.getElementById("toast");if(t){t.remove();}},5000);</script>{% endif %}
+{% if toast %}<div class="toast{% if toast_err %} err{% endif %}" id="toast" role="{{ "alert" if toast_err else "status" }}"><span>{{ toast }}</span>{% if can_undo %}<form method="post" action="{{ url_for('undo') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ here }}"><button type="submit">Undo</button></form>{% endif %}</div>
+{% if not toast_err %}<script>setTimeout(function(){var t=document.getElementById("toast");if(t){t.remove();}},5000);</script>{% endif %}{% endif %}
 </body>
 </html>""",
     "login.html": """{% extends "base.html" %}{% block title %}jobscout · sign in{% endblock %}{% block main %}
@@ -192,6 +216,7 @@ TEMPLATES = {
 {% if filtered %}<div class="why out"><p>Filtered out: {{ filtered }}</p></div>{% else %}<div class="why"><span class="k">Why</span><p>{{ why }}</p></div>{% endif %}
 {% if job.description %}<details class="desc"><summary>Read description</summary><div class="body">{{ job.description }}</div></details>{% endif %}
 {% if open_url %}<a class="open" href="{{ open_url }}" target="_blank" rel="noopener noreferrer">Open ad</a>{% endif %}
+{% if show_files %}{% include "files.html" %}{% endif %}
 <form class="acts" method="post" action="{{ url_for('act') }}">
 <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="job_id" value="{{ job.id }}"><input type="hidden" name="next" value="{{ next_url }}">
 <button class="b skip" name="action" value="skip">Skip</button>
@@ -218,6 +243,7 @@ TEMPLATES = {
 <a class="rt" href="{{ url_for('ad', job_id=job.id) }}">{{ job.title }}</a>
 <p class="co">{{ job.company or "Company not stated" }}</p>
 <span class="pill {{ pill[1] }}">{{ pill[0] }}</span>
+{% include "filesbox.html" %}
 <form class="rowacts" method="post" action="{{ url_for('act') }}">
 <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="job_id" value="{{ job.id }}"><input type="hidden" name="next" value="{{ url_for('kept') }}">
 <button class="b2 appl" name="action" value="applied">Mark applied</button>
@@ -230,7 +256,8 @@ TEMPLATES = {
 <a class="rt" href="{{ url_for('ad', job_id=job.id) }}">{{ job.title }}</a>
 <p class="co">{{ job.company or "Company not stated" }}</p>
 {% if app %}<p class="small">Applied {{ app.applied_on.strftime("%d/%m/%Y") }}</p>
-<div class="tags"><span class="tag">{{ outcome_labels.get(app.outcome, app.outcome) }}</span>{% if due %}<span class="tag due">Follow-up DUE</span>{% endif %}</div>
+<div class="tags"><span class="tag">{{ outcome_labels.get(app.outcome, app.outcome) }}</span>{% if due %}<span class="tag due">Follow-up DUE</span>{% endif %}{% set fc = files.get(job.id, [])|length %}{% if fc %}<span class="tag">{{ fc }} file{{ "s" if fc != 1 }}</span>{% endif %}</div>
+{% if latest_cv.get(job.id) %}<a class="b2 ghost cvbtn" href="{{ url_for('open_file', doc_id=latest_cv[job.id].id) }}" target="_blank" rel="noopener">CV</a>{% endif %}
 {% if ev %}<div class="reply"><span class="k">Latest reply</span><p><span class="tag">{{ reply_labels.get(ev.category, ev.category) }}</span> <span class="small">{{ ev.received_at.strftime("%d/%m/%Y") if ev.received_at else "date unknown" }}</span></p><p class="subj">{{ ev.subject }}</p></div>{% endif %}
 {% if suggest %}<form class="suggest" method="post" action="{{ url_for('reply') }}">
 <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="event_id" value="{{ ev.id }}">
@@ -242,6 +269,7 @@ TEMPLATES = {
 <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="job_id" value="{{ job.id }}">
 {% for value, label in outcomes %}<button class="ob{% if app.outcome == value %} on{% endif %}" name="outcome" value="{{ value }}"{% if app.outcome == value %} aria-pressed="true"{% endif %}>{{ label }}</button>{% endfor %}
 </form>{% else %}<p class="small">No application record for this ad.</p>{% endif %}
+{% include "filesbox.html" %}
 </li>{% endfor %}</ul>
 {% else %}<div class="empty"><h2>No applications yet</h2><p>Tap Applied on an ad to start tracking it.</p></div>{% endif %}
 {% endblock %}""",
@@ -256,6 +284,31 @@ TEMPLATES = {
 </form></li>{% endfor %}</ul>
 {% else %}<div class="empty"><h2>Nothing skipped</h2></div>{% endif %}
 {% endblock %}""",
+    "files.html": """<section class="files" aria-label="Files">
+{% set docs = files.get(job.id, []) %}
+<h3 class="fh">Files <span class="small">{{ docs|length }} of {{ max_files }}</span></h3>
+{% if docs %}<ul class="flist">{% for d in docs %}<li class="frow">
+<p class="fmeta"><span class="tag">{{ kind_labels.get(d.kind, d.kind) }}</span> <span class="fname">{{ d.original_name }}</span></p>
+<p class="small">{{ d.uploaded_at.strftime("%d/%m/%Y") }} · {{ human_size(d.size_bytes) }}</p>
+<div class="fbtns">
+<a class="b2 ghost" href="{{ url_for('open_file', doc_id=d.id) }}" target="_blank" rel="noopener">Open</a>
+<details class="del"><summary class="b2 skip">Delete</summary>
+<form class="confirm" method="post" action="{{ url_for('delete_file', doc_id=d.id) }}">
+<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ here }}"><input type="hidden" name="confirm" value="yes">
+<span>Delete this file for good? Tap Delete again to cancel.</span>
+<button class="b2 skip">Yes, delete</button>
+</form></details>
+</div></li>{% endfor %}</ul>{% endif %}
+{% if docs|length < max_files %}<form class="up" method="post" action="{{ url_for('upload_file') }}" enctype="multipart/form-data">
+<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="job_id" value="{{ job.id }}"><input type="hidden" name="next" value="{{ here }}">
+<label class="lbl" for="kind-{{ job.id }}">Kind</label>
+<select id="kind-{{ job.id }}" name="kind">{% for k, label in kind_labels.items() %}<option value="{{ k }}">{{ label }}</option>{% endfor %}</select>
+<label class="lbl" for="file-{{ job.id }}">File: PDF, DOCX or DOC, up to 10 MB</label>
+<input id="file-{{ job.id }}" type="file" name="file" required accept=".pdf,.docx,.doc,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+<button class="b2 appl">Upload</button>
+</form>{% else %}<p class="small">This ad has {{ max_files }} files, the maximum. Delete one to add another.</p>{% endif %}
+</section>""",
+    "filesbox.html": """{% set n = files.get(job.id, [])|length %}<details class="filesbox"><summary>Files · {{ n }}</summary>{% include "files.html" %}</details>""",
     "error.html": """{% extends "base.html" %}{% block main %}<div class="empty"><h2>{{ heading }}</h2><p>{{ message }}</p>
 <p><a class="pg" href="{{ url_for('review') }}">Back to Review</a></p></div>{% endblock %}""",
 }
@@ -494,7 +547,7 @@ def _undo_action(db, undo):
 ACTION_TOASTS = {"skip": "Skipped", "keep": "Kept", "applied": "Marked applied", "restore": "Back in Review"}
 
 
-def create_app(pin=None, secret_key=None):
+def create_app(pin=None, secret_key=None, docs_dir=None):
     pin = config.WEB_PIN if pin is None else pin
     secret_key = config.WEB_SECRET_KEY if secret_key is None else secret_key
     if not pin or not secret_key or PLACEHOLDER in (pin, secret_key):
@@ -508,7 +561,9 @@ def create_app(pin=None, secret_key=None):
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+        MAX_CONTENT_LENGTH=25 * 1024 * 1024,  # files over 10 MB are refused with a message in the upload route
     )
+    docs_dir = Path(docs_dir or config.APPLICATIONS_DIR)
     limiter = _LoginLimiter()
     app.extensions["jobscout_limiter"] = limiter
 
@@ -539,7 +594,7 @@ def create_app(pin=None, secret_key=None):
         return {"csrf": csrf_token(), "css": CSS, "fonts_url": FONTS_URL, "tabs": TABS,
                 "review_statuses": REVIEW_STATUSES, "status_labels": STATUS_LABELS,
                 "outcome_labels": OUTCOME_LABELS, "reply_labels": REPLY_LABELS, "outcomes": OUTCOMES, "here": request.full_path.rstrip("?"),
-                "toast": session.pop("toast", None), "can_undo": "undo" in session}
+                "toast": session.pop("toast", None), "toast_err": session.pop("toast_err", False), "kind_labels": documents.KINDS, "max_files": documents.MAX_FILES, "human_size": documents.human_size, "can_undo": "undo" in session}
 
     @app.before_request
     def _require_login():
@@ -570,6 +625,20 @@ def create_app(pin=None, secret_key=None):
     def _bad_request(_e):
         return render_template("error.html", nav=False, heading="Form expired",
                                message="Reload the page and try again."), 400
+
+    @app.errorhandler(413)
+    def _too_large(_e):
+        return render_template("error.html", nav=False, heading="File too large",
+                               message="Files can be at most 10 MB. Go back and choose a smaller file."), 413
+
+    def files_for(job_ids):
+        """{job_id: [ApplicationDocument, newest first]}"""
+        out = {}
+        if job_ids:
+            for d in db().scalars(select(ApplicationDocument).where(ApplicationDocument.job_id.in_(job_ids))
+                                  .order_by(ApplicationDocument.uploaded_at.desc(), ApplicationDocument.id.desc())):
+                out.setdefault(d.job_id, []).append(d)
+        return out
 
     @app.errorhandler(404)
     def _not_found(_e):
@@ -643,14 +712,16 @@ def create_app(pin=None, secret_key=None):
         if job is None:
             abort(404)
         active = {"shortlisted": "kept", "applied": "applied", "skipped": "skipped"}.get(job.status, "review")
-        return page("ad.html", active, [job], **card_ctx(job, url_for("ad", job_id=job.id)))
+        return page("ad.html", active, [job], show_files=True, files=files_for([job.id]),
+                    **card_ctx(job, url_for("ad", job_id=job.id)))
 
     @app.route("/kept")
     def kept():
         today = date.today()
         jobs = list(db().scalars(select(Job).where(Job.status == "shortlisted")
                                  .order_by(Job.closing_date.is_(None), Job.closing_date, Job.id)))
-        return page("kept.html", "kept", jobs, items=[(j, _closing_pill(j, today)) for j in jobs])
+        return page("kept.html", "kept", jobs, items=[(j, _closing_pill(j, today)) for j in jobs],
+                    files=files_for([j.id for j in jobs]))
 
     @app.route("/applied")
     def applied():
@@ -676,7 +747,10 @@ def create_app(pin=None, secret_key=None):
             if suggest == (app_row.outcome if app_row else None):
                 suggest = None
             items.append((job, app_row, due, ev, suggest))
-        return page("applied.html", "applied", [j for j, _a in rows], items=items)
+        files = files_for(job_ids)
+        latest_cv = {jid: next((d for d in docs if d.kind == "cv"), None) for jid, docs in files.items()}
+        return page("applied.html", "applied", [j for j, _a in rows], items=items, files=files,
+                    latest_cv={k: v for k, v in latest_cv.items() if v})
 
     @app.route("/reply", methods=["POST"])
     def reply():
@@ -758,6 +832,86 @@ def create_app(pin=None, secret_key=None):
         session.pop("undo", None)
         session["toast"] = f"Outcome: {OUTCOME_LABELS[value]}"
         return redirect(url_for("applied"))
+
+    @app.route("/files/upload", methods=["POST"])
+    def upload_file():
+        nxt = _safe_next(request.form.get("next"), url_for("applied"))
+        s = db()
+        job = s.get(Job, request.form.get("job_id", type=int) or 0)
+        if job is None:
+            abort(404)
+        upload = request.files.get("file")
+        try:
+            kind = request.form.get("kind", "")
+            if kind not in documents.KINDS:
+                raise documents.UploadRejected("Choose CV, Cover letter or Other.")
+            if upload is None or not upload.filename:
+                raise documents.UploadRejected("Choose a file to upload.")
+            data = upload.stream.read(documents.MAX_BYTES + 1)
+            count = s.scalar(select(func.count()).select_from(ApplicationDocument)
+                             .where(ApplicationDocument.job_id == job.id))
+            ext = documents.check_upload(upload.filename, data, count)
+        except documents.UploadRejected as e:
+            session["toast"], session["toast_err"] = f"Not saved: {e}", True
+            session.pop("undo", None)
+            return redirect(nxt)
+        stored = documents.new_stored_name(ext)
+        path = documents.file_path(docs_dir, job.id, stored)  # built from the job id and a random name only
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "xb") as out:
+            out.write(data)
+        doc = ApplicationDocument(job_id=job.id, kind=kind, original_name=documents.display_name(upload.filename),
+                                  stored_name=stored, size_bytes=len(data))
+        s.add(doc)
+        try:
+            s.commit()
+        except Exception:
+            path.unlink(missing_ok=True)
+            raise
+        session.pop("undo", None)
+        session["toast"] = f"Saved: {doc.original_name}"
+        return redirect(nxt)
+
+    @app.route("/files/<int:doc_id>")
+    def open_file(doc_id):
+        s = db()
+        doc = s.get(ApplicationDocument, doc_id)
+        if doc is None or s.get(Job, doc.job_id) is None:
+            abort(404)
+        try:
+            path = documents.file_path(docs_dir, doc.job_id, doc.stored_name)
+        except ValueError:
+            abort(404)
+        if not path.is_file():
+            abort(404)
+        ext = doc.stored_name.rsplit(".", 1)[1]
+        name = documents.header_name(doc.original_name)
+        if not name.lower().endswith("." + ext):
+            name = f"{name}.{ext}"
+        return send_file(path, mimetype=documents.ALLOWED[ext], as_attachment=(ext != "pdf"),
+                         download_name=name, max_age=0, conditional=False, etag=False)
+
+    @app.route("/files/<int:doc_id>/delete", methods=["POST"])
+    def delete_file(doc_id):
+        nxt = _safe_next(request.form.get("next"), url_for("applied"))
+        if request.form.get("confirm") != "yes":
+            abort(400)
+        s = db()
+        doc = s.get(ApplicationDocument, doc_id)
+        if doc is None:
+            abort(404)
+        try:
+            path = documents.file_path(docs_dir, doc.job_id, doc.stored_name)
+        except ValueError:
+            path = None
+        name = doc.original_name
+        s.delete(doc)
+        s.commit()
+        if path is not None:
+            path.unlink(missing_ok=True)
+        session.pop("undo", None)
+        session["toast"] = f"Deleted: {name}"
+        return redirect(nxt)
 
     return app
 

@@ -86,3 +86,17 @@ class EmailEvent(Base):
     match_reason: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
     handled: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class ApplicationDocument(Base):
+    """A file you saved for a job (CV, cover letter, ...). The file lives in
+    data/applications/<job_id>/<stored_name>; original_name is only ever shown, never used as a path."""
+    __tablename__ = "application_documents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(20))  # cv / cover_letter / other
+    original_name: Mapped[str] = mapped_column(String(255))
+    stored_name: Mapped[str] = mapped_column(String(64), unique=True)
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

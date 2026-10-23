@@ -21,6 +21,7 @@ MASTER_CV_PATH = ROOT / "data" / "profile" / "master_cv.md"
 RAW_DIR = ROOT / "data" / "raw"
 CV_OUTPUT_DIR = ROOT / "data" / "output" / "cvs"
 DIGEST_DIR = ROOT / "data" / "output" / "digests"
+APPLICATIONS_DIR = ROOT / "data" / "applications"  # per-job files: <job_id>/<random name>
 
 DATABASE_URL = os.getenv("DATABASE_URL") or f"sqlite:///{(ROOT / 'jobscout.db').as_posix()}"
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")

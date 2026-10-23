@@ -61,6 +61,45 @@ To start it automatically at logon and restart it if it crashes, register a sche
 
 Check it with `Get-ScheduledTask -TaskName "jobscout web"`, start it now with `Start-ScheduledTask -TaskName "jobscout web"`, remove it with `Unregister-ScheduledTask -TaskName "jobscout web"`.
 
+## Application files
+
+On the page, every Applied and Kept card and every ad page (`/ad/<id>`) has a **Files** section for the CV, cover letter or other documents you sent for that job. PDF, DOCX and DOC only (checked by content, not just by name), up to 10 MB each and 10 per job. Applied cards show a file count and a **CV** button that opens the newest CV.
+
+The files are stored in `data\applications\<job id>\` under random names; the original file names are kept only in the database (`application_documents` table). The folder is git-ignored and never leaves your PC. Deleting a file on the page removes both the database row and the file. Undo, Skip and Applied never touch files.
+
+## Backup
+
+Everything personal stays out of git, so back these up yourself (for example by copying them to OneDrive or a USB drive):
+
+- `jobscout.db`: ads, labels, applications, replies and the list of saved files
+- `data\applications\`: the files themselves (keep it together with `jobscout.db`, from the same moment)
+- `data\profile\`: your master CV and profile
+- `.env`: your keys and passwords (store it somewhere private)
+
+## Troubleshooting
+
+Two scheduled tasks run jobscout: **jobscout daily** (07:30, collect and email the digest) and **jobscout web** (at logon, the triage page). Check when they last ran and how they ended:
+
+    Get-ScheduledTaskInfo -TaskName "jobscout daily" | Select-Object LastRunTime, LastTaskResult, NextRunTime
+    Get-ScheduledTaskInfo -TaskName "jobscout web"   | Select-Object LastRunTime, LastTaskResult
+
+`LastTaskResult` 0 means success and 267009 means it is still running (normal for the web task). Any other value is the exit code of a failed run; the log says why.
+
+Logs (UTF-8, newest at the bottom):
+
+- `data\output\daily.log`: one block per daily run, from "starting jobscout daily" to "finished, exit code N". A good run includes "Digest sent". `daily.old.log` holds output from before 23 Oct 2026 (UTF-16).
+- `data\output\web.log`: one "starting jobscout web" line per start, plus anything the page prints.
+
+Run them by hand from the project folder:
+
+    powershell -ExecutionPolicy Bypass -File scripts\run_daily.ps1          # same as the task, logs to daily.log
+    .venv\Scripts\python.exe -m jobscout.daily --no-collect --dry-run      # print the digest, send nothing
+    .venv\Scripts\python.exe -m jobscout.daily --test                      # send a test email
+    powershell -ExecutionPolicy Bypass -File scripts\run_web.ps1            # start the page, logs to web.log
+    Start-ScheduledTask -TaskName "jobscout daily"                         # or trigger a task directly
+
+If the page does not answer, check that something is listening with `Get-NetTCPConnection -LocalPort 8765 -State Listen`.
+
 ## Stack
 
 Python, requests, BeautifulSoup, SQLAlchemy, scikit-learn, pandas, SMTP.
