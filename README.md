@@ -52,14 +52,14 @@ A small PIN-protected web page for working through ads on the phone: one ad at a
 
    or, with the venv active, `python -m jobscout.web`. Output goes to `data\output\web.log`. Allow it through Windows Firewall on private networks when asked, then open `http://<pc-ip>:8765` on the phone (same Wi-Fi).
 
-To start it automatically at logon and restart it if it crashes, register a scheduled task once (in PowerShell, from the project folder):
+`run_web.ps1` starts a hidden supervisor that runs the server and restarts it within seconds if it exits, then returns straight away; running it again while the page is up does nothing. Two scheduled tasks call it: **jobscout web** at logon and **jobscout web watchdog** every 5 minutes (in case the supervisor itself was stopped). Both run it through `conhost.exe --headless`, so no window opens. On Windows 11, `-WindowStyle Hidden` alone still opens a Windows Terminal tab, and closing that tab used to kill the page. To register them once (normal PowerShell, from the project folder):
 
-    $action   = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PWD\scripts\run_web.ps1`"" -WorkingDirectory "$PWD"
-    $trigger  = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-    $settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-    Register-ScheduledTask -TaskName "jobscout web" -Action $action -Trigger $trigger -Settings $settings -Description "jobscout triage page"
+    $action   = New-ScheduledTaskAction -Execute "C:\Windows\System32\conhost.exe" -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PWD\scripts\run_web.ps1`"" -WorkingDirectory "$PWD"
+    $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    Register-ScheduledTask -TaskName "jobscout web" -Action $action -Trigger (New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME) -Settings $settings
+    Register-ScheduledTask -TaskName "jobscout web watchdog" -Action $action -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)) -Settings $settings
 
-Check it with `Get-ScheduledTask -TaskName "jobscout web"`, start it now with `Start-ScheduledTask -TaskName "jobscout web"`, remove it with `Unregister-ScheduledTask -TaskName "jobscout web"`.
+Stop the page with `powershell -ExecutionPolicy Bypass -File scripts\run_web.ps1 -Stop` (otherwise the supervisor restarts it); run `run_web.ps1` again to start it, for example after changing the code.
 
 ## Application files
 
@@ -78,27 +78,34 @@ Everything personal stays out of git, so back these up yourself (for example by 
 
 ## Troubleshooting
 
-Two scheduled tasks run jobscout: **jobscout daily** (07:30, collect and email the digest) and **jobscout web** (at logon, the triage page). Check when they last ran and how they ended:
+Scheduled tasks run jobscout: **jobscout daily** (07:30, collect and email the digest), **jobscout web** (at logon) and **jobscout web watchdog** (every 5 minutes), which both start the triage page. Check when they last ran and how they ended:
 
-    Get-ScheduledTaskInfo -TaskName "jobscout daily" | Select-Object LastRunTime, LastTaskResult, NextRunTime
-    Get-ScheduledTaskInfo -TaskName "jobscout web"   | Select-Object LastRunTime, LastTaskResult
+    Get-ScheduledTaskInfo -TaskName "jobscout daily"        | Select-Object LastRunTime, LastTaskResult, NextRunTime
+    Get-ScheduledTaskInfo -TaskName "jobscout web"          | Select-Object LastRunTime, LastTaskResult
+    Get-ScheduledTaskInfo -TaskName "jobscout web watchdog" | Select-Object LastRunTime, LastTaskResult, NextRunTime
 
-`LastTaskResult` 0 means success and 267009 means it is still running (normal for the web task). Any other value is the exit code of a failed run; the log says why.
+`LastTaskResult` 0 means success. 267009 means still running; the web tasks finish within seconds, so a web task stuck on Running needs `Stop-ScheduledTask`. 3221225786 (0xC000013A) means the process was closed from outside (a closed console window or Ctrl+C). Any other value is the exit code of a failed run; the log says why.
+
+If the page is down (connection refused):
+
+1. `Get-NetTCPConnection -LocalPort 8765 -State Listen`: nothing listening means the server is not running.
+2. Look at the end of `data\output\web.log`. "exited with code N; restarting" lines come from the supervisor. A "Not starting: ..." line means `.env` is missing `WEB_PIN` or `WEB_SECRET_KEY`.
+3. Start it: `powershell -ExecutionPolicy Bypass -File scripts\run_web.ps1` (or wait at most 5 minutes for the watchdog).
+4. Works on the PC but not on the phone: check Tailscale is connected on both, and use the PC's Tailscale address (`tailscale ip -4`) with port 8765.
 
 Logs (UTF-8, newest at the bottom):
 
 - `data\output\daily.log`: one block per daily run, from "starting jobscout daily" to "finished, exit code N". A good run includes "Digest sent". `daily.old.log` holds output from before 23 Oct 2026 (UTF-16).
-- `data\output\web.log`: one "starting jobscout web" line per start, plus anything the page prints.
+- `data\output\web.log`: "starting jobscout web" and "exited with code N" lines from the supervisor, plus anything the page prints.
 
 Run them by hand from the project folder:
 
     powershell -ExecutionPolicy Bypass -File scripts\run_daily.ps1          # same as the task, logs to daily.log
     .venv\Scripts\python.exe -m jobscout.daily --no-collect --dry-run      # print the digest, send nothing
     .venv\Scripts\python.exe -m jobscout.daily --test                      # send a test email
-    powershell -ExecutionPolicy Bypass -File scripts\run_web.ps1            # start the page, logs to web.log
+    powershell -ExecutionPolicy Bypass -File scripts\run_web.ps1            # start the page (no-op if it is up)
+    powershell -ExecutionPolicy Bypass -File scripts\run_web.ps1 -Stop      # stop the page
     Start-ScheduledTask -TaskName "jobscout daily"                         # or trigger a task directly
-
-If the page does not answer, check that something is listening with `Get-NetTCPConnection -LocalPort 8765 -State Listen`.
 
 ## Stack
 
